@@ -39,6 +39,7 @@
 #include <linux/compiler.h>
 #include <linux/gfp.h>
 #include <linux/module.h>
+#include <linux/ip_mpip.h>
 
 /* People can turn this off for buggy TCP's found in printers etc. */
 int sysctl_tcp_retrans_collapse __read_mostly = 1;
@@ -1274,6 +1275,12 @@ unsigned int tcp_current_mss(struct sock *sk)
 		mss_now -= delta;
 	}
 
+	if (sysctl_mpip_enabled &&
+		is_mpip_enabled(inet_sk(sk)->inet_daddr, inet_sk(sk)->inet_dport))
+	{
+//		printk("%d, %s, %s, %d\n", mss_now, __FILE__, __FUNCTION__, __LINE__);
+		mss_now -= ((MPIP_CM_LEN * 2 + 3) & ~3);
+	}
 	return mss_now;
 }
 
