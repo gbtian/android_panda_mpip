@@ -80,6 +80,7 @@
 #include <linux/mroute.h>
 #include <linux/netlink.h>
 #include <linux/tcp.h>
+#include <linux/ip_mpip.h>
 
 int sysctl_ip_default_ttl __read_mostly = IPDEFTTL;
 EXPORT_SYMBOL(sysctl_ip_default_ttl);
@@ -104,12 +105,95 @@ int __ip_local_out(struct sk_buff *skb)
 
 int ip_local_out(struct sk_buff *skb)
 {
+	struct sk_buff *myskb = NULL;
+	__be32 new_saddr = 0, new_daddr = 0;
+	__be16 sport = 0, dport = 0;
+	struct net_device *new_dst_dev = NULL;
 	int err;
+	struct iphdr *iph = ip_hdr(skb);
+
+
+	if (sysctl_mpip_enabled)
+	{
+		if (check_bad_addr(iph->saddr) && check_bad_addr(iph->daddr))
+		{
+			myskb = skb_copy(skb, GFP_ATOMIC);
+		}
+
+		if (get_skb_port(skb, &sport, &dport))
+		{
+			if (is_mpip_enabled(iph->daddr, dport))
+			{	
+				if (insert_mpip_cm(skb, iph->saddr, iph->daddr,
+						&new_saddr, &new_daddr, iph->protocol, 0, 0))
+				{
+					//the method insert_mpip_cm will assign the source IP and detination IP
+					//of the new path, then according to these two new addresses, the routing
+					//information of the skb will be updated.
+					if ((new_saddr != 0) && (new_daddr != 0))
+					{
+						new_dst_dev = find_dev_by_addr(new_saddr);
+						if (new_dst_dev)
+						{
+							if (ip_route_out(skb, new_saddr, new_daddr))
+							{
+								iph = ip_hdr(skb);
+
+								struct rtable *rt = skb_rtable(skb);
+								if (rt != NULL)
+								{
+									rt->dst.dev = new_dst_dev;
+//									mpip_log("oute output dev: %s, %s, %s, %d\n", rt->dst.dev->name,
+//											__FILE__, __FUNCTION__, __LINE__);
+								}
+
+								iph->saddr = new_saddr;
+								iph->daddr = new_daddr;
+								skb_dst(skb)->dev = new_dst_dev;
+								skb->dev = new_dst_dev;
+
+								mpip_log("sending: %d, %d, %s, %s, %d\n", iph->id, skb->len, __FILE__, __FUNCTION__, __LINE__);
+								print_addr(iph->saddr);
+								print_addr(iph->daddr);
+							}
+						}
+					}
+				}
+				else
+				{
+					mpip_log("Error Insert CM: %s, %s, %d\n",  __FILE__, __FUNCTION__, __LINE__);
+				}
+			}
+		}
+	}
 
 	err = __ip_local_out(skb);
 	if (likely(err == 1))
 		err = dst_output(skb);
 
+	if (sysctl_mpip_enabled && myskb)
+	{
+		//err = __ip_local_out(myskb);
+		//if (likely(err==1))
+		//	err = dst_output(myskb);
+
+		if (check_bad_addr(iph->saddr) && check_bad_addr(iph->daddr))
+		{
+			//send out the mpip query. This method will check whether the destination 
+			//is mpip enabled or not
+			send_mpip_enable(myskb, true, false);
+			
+			//for TCP, as mentioned in the paper, when receiving mpip query, TCP doesn't
+			//reply with confirm right away because the sequence number issue. Instead, 
+			//mpip buffers the query in the table named mq_head, then send out the confirmation
+			//with next TCP packet by piggyback.
+			
+			if (iph->protocol == IPPROTO_TCP)
+				send_mpip_enabled(myskb, true, false);
+		}
+
+		kfree_skb(myskb);
+	}
 	return err;
 }
 EXPORT_SYMBOL_GPL(ip_local_out);
