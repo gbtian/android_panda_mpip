@@ -106,6 +106,7 @@
 #include <net/checksum.h>
 #include <net/xfrm.h>
 #include "udp_impl.h"
+#include <linux/ip_mpip.h>
 
 struct udp_table udp_table __read_mostly;
 EXPORT_SYMBOL(udp_table);
@@ -792,6 +793,14 @@ int udp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 	struct udp_sock *up = udp_sk(sk);
 	struct flowi4 fl4_stack;
 	struct flowi4 *fl4;
+	
+	__be16 dnsport = htons((unsigned short int) inet->inet_dport);
+//	printk("%d, %s, %s, %d\n", len, __FILE__, __FUNCTION__, __LINE__);
+	if (sysctl_mpip_enabled && (dnsport != 53) && is_mpip_enabled(inet->inet_daddr, inet->inet_dport))
+	{
+		len -= ((MPIP_CM_LEN * 2 + 3) & ~3);
+	}
+	
 	int ulen = len;
 	struct ipcm_cookie ipc;
 	struct rtable *rt = NULL;
